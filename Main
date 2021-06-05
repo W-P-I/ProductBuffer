@@ -1,0 +1,96 @@
+////////////////////////////////////////////////////////////
+//   Copyright (c)  WPI
+//------------------------------------------------------------
+//   Routine: ProductBuffer - Logic
+//   Author: WPI\Tom.Reit
+//   Created: 12-4-2021
+//------------------------------------------------------------
+////////////////////////////////////////////////////////////
+/* Set buffer size accordingly */
+if (s:fs OR MAX_ARRAY_SIZE=0) then size(Buffer[0],0,MAX_ARRAY_SIZE); end_if;		// get buffersize
+
+
+/* Function list */
+OSRI(RE_productDetect);
+
+
+if i=0 					 then		i:=1; 									end_if;// prevents underflow
+if (i>=MAX_ARRAY_SIZE-1) then		i:=MAX_ARRAY_SIZE-1; ER_Overflow:=1;	end_if;// prevents overflow
+ProductAmount:=i-1; // indicator how many products are in buffer.
+
+/* reset faults and clear buffer */
+if reset then															
+	i:=1;			// reset buffer index back to 1
+	ER_Overflow:=0;	// reset error from overflow
+	for ClearBuffer := 0 to MAX_ARRAY_SIZE-1 do
+		Buffer[ClearBuffer]:=0;	// clear buffer
+	end_for;
+end_if;
+
+/* Enable product buffer*/
+if bufferEnabled then													
+	RE_productDetect.InputBit := ProductDetect OR HMI_SimulateProductDetect;/* on the rising edge product will be added to buffer*/
+else
+	ProductReachedObject:=0;
+	RE_productDetect.InputBit:=0;
+	RE_productDetect.OutputBit:=0;
+	reset:=1;
+end_if;
+
+/* Product count and add to buffer */
+if RE_productDetect.OutputBit then										
+Buffer[i]:= ActualPosition + Distance_to_Object;
+i:=i+1;
+end_if;
+
+/* Wraparound buffer if actualPosition goes from positive to negative due */
+if (ActualPosition > 0) AND (ActualPosition<>0) then		
+	Prev_ActualPos:=ActualPosition;
+	Shift_Flag:=1;//buffer may shift if digit gets to negative									
+else
+	if Shift_Flag then 
+		for i_shift := 1 to MAX_ARRAY_SIZE-1 do
+		Buffer[i_shift]:= Buffer[i_shift]-(Prev_ActualPos*2);// Prev_ActualPos*2 cuz shift goes from max to min, we need to shift the overflow pos to 0 and then to negative spectrum
+		end_for;
+		Shift_Flag:=0;
+	end_if;
+end_if;
+
+/* update ramaing distance constantly*/
+RemainingDistance:=Buffer[1]- ActualPosition;							
+
+/* Feedback to program if there is product in buffer*/
+if abs(RemainingDistance) <> abs(ActualPosition) then					
+	ProductInBuffer:=1;
+else
+	ProductInBuffer:=0;
+end_if;
+
+/* Product reached object*/
+if (0>=RemainingDistance-offset) then											
+	if (i<>1) then/* if index is larger then 1 product in buffer*/
+		for BufferShift := 0 to MAX_ARRAY_SIZE-2 do
+			Buffer[BufferShift]:=Buffer[BufferShift+1];
+		end_for;
+		if 		RequireHandshake then 
+		ProductReachedObject:=1; // product has reached object
+		end_if;
+		if NOT 	RequireHandshake then
+			ProductReachedObject:=1;
+		end_if;
+		i:=i-1;
+	else
+		i:=1;// only 1 item in buffer, so dont have to loop back
+	end_if;
+else
+if NOT RequireHandshake then
+	ProductReachedObject:=0;
+end_if;
+	
+end_if;
+
+/* HMI_array for a human readable buffer*/
+for count_hmi_array := 0 to MAX_ARRAY_SIZE-1 do
+	HMI_array[count_hmi_array]:=abs(Buffer[count_hmi_array]);							// copy value form actual buffer to HMI buffer.
+	HMI_array[count_hmi_array]:=abs(ActualPosition)-abs(HMI_array[count_hmi_array]);	// remove actual position from value in HMI buffer to give realistic view of buffer.
+end_for;
